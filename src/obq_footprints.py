@@ -1,4 +1,5 @@
 import Metashape as M
+import numpy as np
 from scipy.spatial.transform import Rotation as R
 
 
@@ -20,48 +21,42 @@ def collinearity_condition(photo_location, photo_opk, focal_length, plate_xy, de
     return X, Y, mean_height
 
 
-def camera_footprint(cam, active_chunk, mean_terrain_height):
+def camera_footprint(cam: M.Camera, active_chunk, mean_terrain_height, euler_angles):
     """ Create footprint of given camera in specified chunk. """
     # Get camera name
     name = cam.label
 
     # Get camera EOP
-    location = cam.reference.location
-    location = [location.x, location.y, location.z]
-    rotation = cam.reference.rotation
-    rotation = [-rotation.x, -rotation.y, rotation.z]
+    extrinsic = np.identity(4)
+    if euler_angles == M.EulerAngles.EulerAnglesOPK:
+        extrinsic[:3, :3] = np.float64(M.Utils.opk2mat(cam.reference.rotation)).reshape((3,3))
+    elif euler_angles == M.EulerAngles.EulerAnglesYPR:
+        extrinsic[:3, :3] = np.float64(M.Utils.ypr2mat(cam.reference.rotation)).reshape((3,3))
+    extrinsic[:3, 3] = np.float64(cam.reference.location)
 
-    # Get camera focal length and corners in plate coordinates
-    # Using pixel values
-    if cam.sensor.calibration.f is not None:
-        xaxis = cam.sensor.width / 2
-        yaxis = cam.sensor.height / 2
-        focal_length = cam.sensor.calibration.f
-    # Using metric values if there is no exif data
-    elif cam.sensor.focal_length is not None \
-            and cam.sensor.pixel_width is not None \
-            and cam.sensor.pixel_height is not None:
-        xaxis = (cam.sensor.width * cam.sensor.pixel_width * 10 ** -3 / 2)
-        yaxis = (cam.sensor.height * cam.sensor.pixel_height * 10 ** -3 / 2)
-        focal_length = cam.sensor.focal_length * 10 ** -3
-    else:
-        raise Exception('You have to specify basic sensor parameters, either:\n'
-                        '\t- Camera sensor initial f (in pixels)\n'
-                        '\t- Camera focal length and pixel size (in mm)\n')
+    # Get camera IOP
+    intrinsic = np.zeros((3, 4))
+    intrinsic[0, 0] = cam.calibration.f
+    intrinsic[1, 1] = cam.calibration.f
+    intrinsic[2, 2] = 1.0
+    intrinsic[0, 2] = cam.sensor.width / 2
+    intrinsic[1, 2] = cam.sensor.height / 2
 
-    # List of all corners
-    plate_corners = [
-        [-xaxis, -yaxis],
-        [xaxis, -yaxis],
-        [xaxis, yaxis],
-        [-xaxis, yaxis]
-    ]
-
-    # Calculate XYZ of corners
+    # Cast corners onto Z plane
     terrain_corners = []
-    for x, y in plate_corners:
-        X, Y, Z = collinearity_condition(location, rotation, focal_length, (x, y), mean_height=mean_terrain_height)
-        terrain_corners.append(M.Vector((X, Y, Z)))
+    image_corners = [
+        [0, 0], [cam.sensor.width, 0], [cam.sensor.width, cam.sensor.height], [0, cam.sensor.height]
+    ]
+    for corner in image_corners:
+        ray = np.hstack([corner, [1]])
+        ray = np.linalg.inv(intrinsic[:, :3]) @ ray
+        ray = ray / np.linalg.norm(ray)
+        ray = extrinsic[:3, :3] @ ray
+        ray = ray / np.linalg.norm(ray)
+
+        ray_length = (mean_terrain_height - extrinsic[2, 3]) / ray[2]
+        terrain_corner = extrinsic[:3, 3] + ray_length * ray
+        terrain_corners.append(M.Vector(terrain_corner))
 
     # Add shape attributes and geometry
     shape = active_chunk.shapes.addShape()
@@ -105,7 +100,7 @@ def create_footprints():
     # Process each photo
     print("Processing...")
     for camera in active_chunk.cameras:
-        poly = camera_footprint(camera, active_chunk, mean_height)
+        poly = camera_footprint(camera, active_chunk, mean_height, active_chunk.euler_angles)
         poly.group = footprints_group
 
     print('Done.')
