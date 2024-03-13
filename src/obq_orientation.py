@@ -1,3 +1,4 @@
+import Metashape
 import Metashape as M
 import itertools as itt
 import numpy as np
@@ -116,6 +117,21 @@ def filter_point_cloud(chunk):
 def match_active_chunk():
     chunk = M.app.document.chunk
     pair_matching(chunk)
+
+
+def reference_match_active_chunk():
+    chunk = M.app.document.chunk
+    chunk.matchPhotos(
+        downscale=1,
+        generic_preselection=False,
+        reference_preselection=True,
+        keypoint_limit=30000,
+        keypoint_limit_per_mpx=1000,
+        tiepoint_limit=3000,
+        reset_matches=True,
+        filter_stationary_points=False,
+        keep_keypoints=True
+    )
 
 
 def match_blocks():

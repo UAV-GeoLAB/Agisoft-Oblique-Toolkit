@@ -1,3 +1,7 @@
+import concurrent.futures
+import multiprocessing
+from time import time
+
 import Metashape as M
 
 
@@ -18,10 +22,10 @@ def sort_by_direction():
         group.label = g
         direction_groups.append(group)
 
-    for camera in active_chunk.cameras:
+    def assign_direction(camera, chunk):
         # Find assigned shape
         footprint = int(camera.meta['FootprintId'])
-        footprint = active_chunk.shapes[footprint]
+        footprint = chunk.shapes[footprint]
 
         tmp = M.Utils.opk2mat(camera.reference.rotation)
         tmp = M.Utils.mat2ypr(tmp)
@@ -30,7 +34,7 @@ def sort_by_direction():
         if abs(pitch) < 20 and abs(roll) < 20:
             camera.group = direction_groups[0]
             footprint.attributes['Direction'] = direction_groups[0].label
-            continue
+            return
 
         direction = None
         if pitch > 30:
@@ -46,6 +50,12 @@ def sort_by_direction():
         direction = (direction + fly_direction) % 4
         camera.group = direction_groups[direction + 1]
         footprint.attributes['Direction'] = direction_groups[direction + 1].label
+
+    print("Processing...", end=" ")
+    start = time()
+    with concurrent.futures.ThreadPoolExecutor(multiprocessing.cpu_count()) as executor:
+        executor.map(lambda c: assign_direction(c, active_chunk), active_chunk.cameras)
+    print(time() - start, "s.")
 
     print('Done.')
     M.app.update()
